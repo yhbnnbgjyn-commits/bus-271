@@ -50,6 +50,7 @@
   .source .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--muted); }
   .source.gps { color: var(--gps); } .source.gps .dot { background: var(--gps); }
   .source.sched { color: var(--sched); } .source.sched .dot { background: var(--sched); }
+  .source.lag { color: #64d2ff; } .source.lag .dot { background: #64d2ff; }
   .subline { font-size: 15px; color: var(--muted); margin-top: 6px; min-height: 20px; }
   .subline.second { margin-top: 2px; }
   .stale #etaNum, .stale #etaUnit { opacity: .35; }
@@ -64,7 +65,7 @@
   .next li .t { font-size: 22px; font-weight: 700; width: 70px; }
   .next li .m { font-size: 17px; flex: 1; }
   .next li .tag { font-size: 12px; font-weight: 700; letter-spacing: .5px; }
-  .tag.gps { color: var(--gps); } .tag.sched { color: var(--sched); }
+  .tag.gps { color: var(--gps); } .tag.sched { color: var(--sched); } .tag.lag { color: #64d2ff; }
   .next .empty { color: var(--muted); font-size: 15px; padding: 10px 0; border-top: 1px solid var(--line); }
 
   footer { margin-top: auto; padding-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 14px; }
@@ -121,6 +122,7 @@ const Logic = (() => {
     OPERATOR: 14,            // Nateev Express (operator_ref в данных API)
     TZ: 'Asia/Jerusalem',
     GPS_MAX_AGE_S: 180,      // GPS старше 3 минут не считается актуальным
+    GPS_MAX_LAG_S: 1800,     // GPS старше 30 минут не используем даже для оценки
     MIN_SPEED_MS: 1.0,       // средняя скорость < 1 м/с (3.6 км/ч) = автобус стоит, прогноза нет
     PASSED_TOL_M: 30,        // допуск по дистанции до остановки
     MIN_SPAN_S: 120,         // минимальный интервал между точками для расчёта скорости
@@ -188,14 +190,15 @@ const Logic = (() => {
       if (!g) { g = { lineRef: lr, journeyRef: r.siri_ride__journey_ref, vehicleRef: r.siri_ride__vehicle_ref, pts: [] }; groups.set(key, g); }
       g.pts.push({ t, d: r.distance_from_journey_start });
     }
-    const fresh = []; let stale = 0, unusable = 0, passed = 0;
+    const fresh = [], lagged = []; let stale = 0, unusable = 0, passed = 0, extrapolatedPast = 0;
     for (const g of groups.values()) {
       g.pts.sort((a, b) => a.t - b.t);
       const last = g.pts[g.pts.length - 1];
       const ageS = Math.max(0, (nowMs - last.t) / 1000);
       const remaining = stopDist[g.lineRef] - last.d;
       if (remaining < -CFG.PASSED_TOL_M) { passed++; continue; }   // уже проехал остановку
-      if (ageS > CFG.GPS_MAX_AGE_S) { stale++; continue; }          // устаревший GPS
+      if (ageS > CFG.GPS_MAX_LAG_S) { stale++; continue; }          // слишком старый GPS: даже оценку не строим
+      const isLag = ageS > CFG.GPS_MAX_AGE_S;                       // GPS с задержкой: только оценка, не факт
       let etaS, speedKmh = null;
       if (remaining <= CFG.PASSED_TOL_M) {
         etaS = 0;
@@ -213,25 +216,39 @@ const Logic = (() => {
         speedKmh = speed * 3.6;
       }
       if (etaS > CFG.MAX_ETA_S) continue;
-      fresh.push({
-        kind: 'gps',
-        arrivalMs: Math.max(nowMs, last.t + etaS * 1000),
-        lineRef: g.lineRef, journeyRef: g.journeyRef, vehicleRef: g.vehicleRef,
-        remainingM: Math.max(0, remaining), recordedMs: last.t, speedKmh
-      });
+      const rawArrival = last.t + etaS * 1000;   // позиция на момент последней точки + оставшееся время при средней скорости
+      if (isLag) {
+        // Данные отстают: строим оценку. Если по расчёту автобус уже подъехал/проехал, достоверно мы этого не знаем - не показываем.
+        if (rawArrival < nowMs) { extrapolatedPast++; continue; }
+        const estRemaining = Math.max(0, remaining - ((speedKmh || 0) / 3.6) * ageS);
+        lagged.push({
+          kind: 'gps-lag', arrivalMs: rawArrival, lagS: ageS,
+          lineRef: g.lineRef, journeyRef: g.journeyRef, vehicleRef: g.vehicleRef,
+          remainingM: estRemaining, recordedMs: last.t, speedKmh
+        });
+      } else {
+        fresh.push({
+          kind: 'gps',
+          arrivalMs: Math.max(nowMs, rawArrival),
+          lineRef: g.lineRef, journeyRef: g.journeyRef, vehicleRef: g.vehicleRef,
+          remainingM: Math.max(0, remaining), recordedMs: last.t, speedKmh
+        });
+      }
     }
     fresh.sort((a, b) => a.arrivalMs - b.arrivalMs);
-    return { fresh, stale, unusable, passed, latestMs };
+    lagged.sort((a, b) => a.arrivalMs - b.arrivalMs);
+    return { fresh, lagged, stale, unusable, passed, extrapolatedPast, latestMs };
   }
 
   function build(nowMs, rideStopRows, siriRows) {
     const s = scheduleInfo(rideStopRows, nowMs);
     const g = gpsInfo(siriRows, s.stopDist, nowMs);
     let primary = null, following = [];
-    if (g.fresh.length) {
-      primary = g.fresh[0];
-      const lastGps = g.fresh[g.fresh.length - 1].arrivalMs;
-      following = g.fresh.slice(1).concat(s.sched.filter(x => x.arrivalMs > lastGps));
+    const gpsAll = g.fresh.concat(g.lagged).sort((a, b) => a.arrivalMs - b.arrivalMs);
+    if (gpsAll.length) {
+      primary = gpsAll[0];
+      const lastGps = gpsAll[gpsAll.length - 1].arrivalMs;
+      following = gpsAll.slice(1).concat(s.sched.filter(x => x.arrivalMs > lastGps));
     } else {
       primary = s.sched[0] || null;
       following = s.sched.slice(1);
@@ -240,7 +257,7 @@ const Logic = (() => {
       primary, following: following.slice(0, 4),
       nextSchedule: s.sched[0] || null,
       lineInfo: s.lineInfo, stopDist: s.stopDist,
-      gps: { fresh: g.fresh.length, stale: g.stale, unusable: g.unusable, passed: g.passed, latestMs: g.latestMs },
+      gps: { fresh: g.fresh.length, lagged: g.lagged.length, stale: g.stale, unusable: g.unusable, passed: g.passed, extrapolatedPast: g.extrapolatedPast, latestMs: g.latestMs },
       schedCount: s.sched.length
     };
   }
@@ -388,6 +405,12 @@ const Logic = (() => {
         const age = Math.max(0, Math.round((now - p.recordedMs) / 1000));
         $('sub').textContent = 'до остановки ' + km + ' · данные ' + age + ' с назад · оценка';
         if (r.nextSchedule) $('sub2').textContent = 'По расписанию ближайший: ' + Logic.fmtTime(r.nextSchedule.arrivalMs);
+      } else if (p.kind === 'gps-lag') {
+        src.className = 'source lag'; srcText.textContent = 'GPS С ЗАДЕРЖКОЙ · ОЦЕНКА';
+        const km = p.remainingM >= 1000 ? (p.remainingM / 1000).toFixed(1).replace('.', ',') + ' км' : Math.round(p.remainingM / 10) * 10 + ' м';
+        const lagMin = Math.max(1, Math.round((now - p.recordedMs) / 60000));
+        $('sub').textContent = 'данные Stride отстают на ' + lagMin + ' мин · до остановки примерно ' + km;
+        if (r.nextSchedule) $('sub2').textContent = 'По расписанию ближайший: ' + Logic.fmtTime(r.nextSchedule.arrivalMs);
       } else {
         src.className = 'source sched'; srcText.textContent = 'РАСПИСАНИЕ';
         $('sub').textContent = 'прибытие по расписанию в ' + Logic.fmtTime(p.arrivalMs) + ' · GPS-подтверждения нет';
@@ -409,7 +432,9 @@ const Logic = (() => {
       const li = document.createElement('li');
       const t = document.createElement('span'); t.className = 't'; t.textContent = Logic.fmtTime(x.arrivalMs);
       const m = document.createElement('span'); m.className = 'm'; m.textContent = 'через ' + Logic.minutesLeft(x.arrivalMs, now) + ' мин';
-      const tag = document.createElement('span'); tag.className = 'tag ' + (x.kind === 'gps' ? 'gps' : 'sched'); tag.textContent = x.kind === 'gps' ? 'GPS' : 'расписание';
+      const tag = document.createElement('span');
+      tag.className = 'tag ' + (x.kind === 'gps' ? 'gps' : x.kind === 'gps-lag' ? 'lag' : 'sched');
+      tag.textContent = x.kind === 'gps' ? 'GPS' : x.kind === 'gps-lag' ? 'GPS оценка' : 'расписание';
       li.append(t, m, tag); ul.appendChild(li);
     }
 
@@ -417,10 +442,13 @@ const Logic = (() => {
     const lagS = r.gps.latestMs ? (state.fetchedAt - r.gps.latestMs) / 1000 : null;
     if (r.gpsError) notes.push('GPS-данные недоступны (' + r.gpsError + '). Показано расписание.');
     else if (p && p.kind === 'schedule') {
-      if (lagS !== null && lagS > Logic.CFG.GPS_MAX_AGE_S) notes.push('Источник GPS (Open Bus Stride) отстаёт: последняя точка линии 271 в ' + Logic.fmtTime(r.gps.latestMs) + ' (' + Math.round(lagS / 60) + ' мин назад). Такой GPS не показывается как актуальный, поэтому показано расписание.');
+      if (lagS !== null && lagS > Logic.CFG.GPS_MAX_AGE_S) notes.push('Источник GPS (Open Bus Stride) отстаёт: последняя точка линии 271 в ' + Logic.fmtTime(r.gps.latestMs) + ' (' + Math.round(lagS / 60) + ' мин назад). Оценку по нему построить нельзя (автобусы по расчёту уже проехали остановку, стоят или данных мало), поэтому показано расписание.');
       else if (r.gps.stale) notes.push('GPS-данные устарели (старше 3 минут), поэтому показано расписание.');
       else if (r.gps.unusable) notes.push('Автобус на линии, но не движется или данных для прогноза мало. Показано расписание.');
       else if (r.schedCount) notes.push('GPS-данных по ближайшим рейсам нет. Показано расписание.');
+    }
+    if (!r.gpsError && r.gps.lagged > 0 && lagS !== null && lagS > Logic.CFG.GPS_MAX_AGE_S) {
+      notes.push('GPS-источник (Open Bus Stride) отстаёт на ' + Math.round(lagS / 60) + ' мин. Время для автобусов с пометкой «GPS оценка» рассчитано по их последней точке и средней скорости, это приблизительно.');
     }
     if (lastError) { notes.push('Не удалось обновить: ' + errorText(lastError) + ' Показаны данные от ' + Logic.fmtTime(state.fetchedAt) + '.'); level = 'error'; }
     else if (dataStale) notes.push('Данные не обновлялись больше 2 минут (последние: ' + Logic.fmtTime(state.fetchedAt) + ').');
