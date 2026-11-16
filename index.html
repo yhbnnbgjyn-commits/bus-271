@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Автобус 271">
+<link rel="apple-touch-icon" href="icon.png">
+<title>271 · остановка 41480</title>
+<style>
+  :root {
+    --bg: #000;
+    --fg: #f5f5f7;
+    --muted: #8e8e93;
+    --line: #2c2c2e;
+    --gps: #30d158;
+    --sched: #ffd60a;
+    --err: #ff453a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: max(16px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
+             max(16px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+  }
+  main { max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; min-height: calc(100dvh - 32px); }
+
+  header { display: flex; align-items: center; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .route { font-size: 72px; font-weight: 800; line-height: 1; letter-spacing: -2px; }
+  .stopinfo { min-width: 0; }
+  .stopnum { font-size: 20px; font-weight: 600; }
+  .stopname { font-size: 14px; color: var(--muted); margin-top: 2px; }
+  .dir { font-size: 14px; color: var(--muted); margin-top: 2px; }
+  .dest { font-size: 13px; color: var(--muted); margin-top: 2px; unicode-bidi: plaintext; }
+
+  .hero { text-align: center; padding: 22px 0 14px; }
+  .label { font-size: 17px; color: var(--muted); }
+  .eta { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin: 2px 0 6px; }
+  #etaNum { font-size: min(46vw, 230px); font-weight: 800; line-height: 1; letter-spacing: -4px; font-variant-numeric: tabular-nums; }
+  #etaNum.mid { font-size: min(36vw, 180px); }
+  #etaNum.word { font-size: min(18vw, 90px); letter-spacing: -1px; }
+  #etaUnit { font-size: 28px; font-weight: 600; color: var(--muted); }
+  .source { display: inline-flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; letter-spacing: .5px; }
+  .source .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--muted); }
+  .source.gps { color: var(--gps); } .source.gps .dot { background: var(--gps); }
+  .source.sched { color: var(--sched); } .source.sched .dot { background: var(--sched); }
+  .subline { font-size: 15px; color: var(--muted); margin-top: 6px; min-height: 20px; }
+  .subline.second { margin-top: 2px; }
+  .stale #etaNum, .stale #etaUnit { opacity: .35; }
+
+  .notice { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font-size: 14px; color: var(--fg); margin: 6px 0 10px; }
+  .notice.warn { border-color: var(--sched); }
+  .notice.error { border-color: var(--err); color: var(--err); }
+
+  .next h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 10px 0 6px; }
+  .next ul { list-style: none; margin: 0; padding: 0; }
+  .next li { display: flex; align-items: baseline; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  .next li .t { font-size: 22px; font-weight: 700; width: 70px; }
+  .next li .m { font-size: 17px; flex: 1; }
+  .next li .tag { font-size: 12px; font-weight: 700; letter-spacing: .5px; }
+  .tag.gps { color: var(--gps); } .tag.sched { color: var(--sched); }
+  .next .empty { color: var(--muted); font-size: 15px; padding: 10px 0; border-top: 1px solid var(--line); }
+
+  footer { margin-top: auto; padding-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 14px; }
+  button {
+    font: inherit; font-size: 17px; font-weight: 600; color: var(--fg); background: #1c1c1e;
+    border: 1px solid var(--line); border-radius: 14px; padding: 12px 22px; min-height: 48px;
+  }
+  button:active { background: #2c2c2e; }
+  button:disabled { opacity: .5; }
+  #debug { white-space: pre-wrap; word-break: break-all; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="route">271</div>
+    <div class="stopinfo">
+      <div class="stopnum">остановка 41480</div>
+      <div class="stopname">Крайон · Дерех Ако — Хайфа</div>
+      <div class="dir">→ Акко / Нагария</div>
+      <div class="dest" id="dest" dir="rtl" hidden></div>
+    </div>
+  </header>
+
+  <section class="hero" id="hero">
+    <div class="label" id="label">Загрузка…</div>
+    <div class="eta"><span id="etaNum">–</span><span id="etaUnit" hidden>мин</span></div>
+    <div class="source" id="source" hidden><span class="dot"></span><span id="sourceText"></span></div>
+    <div class="subline" id="sub"></div>
+    <div class="subline second" id="sub2"></div>
+  </section>
+
+  <section class="notice" id="notice" hidden></section>
+
+  <section class="next">
+    <h2>Следующие</h2>
+    <ul id="nextList"></ul>
+  </section>
+
+  <footer>
+    <span id="updated">Обновлено —</span>
+    <button id="refreshBtn" type="button">Обновить</button>
+  </footer>
+
+  <pre id="debug" hidden></pre>
+</main>
+
+<script>
+/*LOGIC_START*/
+const Logic = (() => {
+  const CFG = {
+    STOP_CODE: 41480,
+    ROUTE: '271',
+    OPERATOR: 14,            // Nateev Express (operator_ref в данных API)
+    TZ: 'Asia/Jerusalem',
+    GPS_MAX_AGE_S: 180,      // GPS старше 3 минут не считается актуальным
+    MIN_SPEED_MS: 1.0,       // средняя скорость < 1 м/с (3.6 км/ч) = автобус стоит, прогноза нет
+    PASSED_TOL_M: 30,        // допуск по дистанции до остановки
+    MIN_SPAN_S: 120,         // минимальный интервал между точками для расчёта скорости
+    TARGET_SPAN_S: 300,      // желаемый интервал (около 5 минут)
+    MAX_ETA_S: 5400          // прогноз GPS дальше 90 минут не показываем
+  };
+
+  const timeFmt = new Intl.DateTimeFormat('ru-RU', { timeZone: CFG.TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const timeSecFmt = new Intl.DateTimeFormat('ru-RU', { timeZone: CFG.TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  const dateFmt = new Intl.DateTimeFormat('en-CA', { timeZone: CFG.TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+
+  const fmtTime = (ms, withSec) => (withSec ? timeSecFmt : timeFmt).format(new Date(ms));
+  const israelDate = (ms) => dateFmt.format(new Date(ms));            // YYYY-MM-DD по времени Израиля
+  const prevDate = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10); };
+  const minutesLeft = (arrivalMs, nowMs) => Math.max(0, Math.round((arrivalMs - nowMs) / 60000));
+
+  function validSchedRow(r) {
+    return !!r && r.gtfs_stop__code === CFG.STOP_CODE &&
+      String(r.gtfs_route__route_short_name) === CFG.ROUTE &&
+      r.gtfs_route__operator_ref === CFG.OPERATOR &&
+      typeof r.arrival_time === 'string';
+  }
+
+  // route_long_name имеет вид "ОТКУДА<->КУДА-<направление>"; направление 1 = к правой части, 2 = к левой
+  function destOf(longName, direction) {
+    const parts = String(longName || '').split('<->');
+    if (parts.length < 2) return '';
+    return (direction === '2' ? parts[0] : parts[1]).trim();
+  }
+
+  function scheduleInfo(rows, nowMs) {
+    const seen = new Set(), sched = [], stopDist = {}, lineInfo = {};
+    for (const r of rows || []) {
+      if (!validSchedRow(r)) continue;
+      const lr = r.gtfs_route__line_ref;
+      if (typeof r.shape_dist_traveled === 'number' && !(lr in stopDist)) stopDist[lr] = r.shape_dist_traveled;
+      if (!(lr in lineInfo)) {
+        const dir = String(r.gtfs_route__route_direction);
+        lineInfo[lr] = { direction: dir, dest: destOf(r.gtfs_route__route_long_name, dir) };
+      }
+      const t = Date.parse(r.arrival_time);
+      if (!isFinite(t) || t < nowMs) continue;          // прошедшие рейсы не показываем, отрицательного времени не бывает
+      if (seen.has(r.gtfs_ride_id)) continue;
+      seen.add(r.gtfs_ride_id);
+      sched.push({ kind: 'schedule', arrivalMs: t, lineRef: lr, rideId: r.gtfs_ride_id, journeyRef: r.gtfs_ride__journey_ref });
+    }
+    sched.sort((a, b) => a.arrivalMs - b.arrivalMs);
+    return { sched, stopDist, lineInfo };
+  }
+
+  // GPS: остаток пути = (расстояние до остановки по маршруту) - (distance_from_journey_start автобуса);
+  // скорость = средняя по собственным точкам автобуса за последние минуты (не мгновенная velocity).
+  function gpsInfo(rows, stopDist, nowMs) {
+    const groups = new Map();
+    for (const r of rows || []) {
+      if (r.siri_route__operator_ref !== CFG.OPERATOR) continue;
+      const lr = r.siri_route__line_ref;
+      if (!(lr in stopDist)) continue;
+      const t = Date.parse(r.recorded_at_time);
+      if (!isFinite(t) || typeof r.distance_from_journey_start !== 'number') continue;
+      const key = r.siri_ride__id != null ? r.siri_ride__id : r.siri_ride__journey_ref + '|' + r.siri_ride__vehicle_ref;
+      let g = groups.get(key);
+      if (!g) { g = { lineRef: lr, journeyRef: r.siri_ride__journey_ref, vehicleRef: r.siri_ride__vehicle_ref, pts: [] }; groups.set(key, g); }
+      g.pts.push({ t, d: r.distance_from_journey_start });
+    }
+    const fresh = []; let stale = 0, unusable = 0, passed = 0;
+    for (const g of groups.values()) {
+      g.pts.sort((a, b) => a.t - b.t);
+      const last = g.pts[g.pts.length - 1];
+      const ageS = Math.max(0, (nowMs - last.t) / 1000);
+      const remaining = stopDist[g.lineRef] - last.d;
+      if (remaining < -CFG.PASSED_TOL_M) { passed++; continue; }   // уже проехал остановку
+      if (ageS > CFG.GPS_MAX_AGE_S) { stale++; continue; }          // устаревший GPS
+      let etaS, speedKmh = null;
+      if (remaining <= CFG.PASSED_TOL_M) {
+        etaS = 0;
+      } else {
+        const cands = g.pts.filter(p => p.t <= last.t - CFG.MIN_SPAN_S * 1000);
+        if (!cands.length) { unusable++; continue; }
+        let ref = cands[0], best = Infinity;
+        for (const p of cands) {
+          const diff = Math.abs((last.t - p.t) / 1000 - CFG.TARGET_SPAN_S);
+          if (diff < best) { best = diff; ref = p; }
+        }
+        const speed = (last.d - ref.d) / ((last.t - ref.t) / 1000);   // м/с
+        if (!(speed >= CFG.MIN_SPEED_MS)) { unusable++; continue; }   // стоит / нет данных о движении
+        etaS = remaining / speed;
+        speedKmh = speed * 3.6;
+      }
+      if (etaS > CFG.MAX_ETA_S) continue;
+      fresh.push({
+        kind: 'gps',
+        arrivalMs: Math.max(nowMs, last.t + etaS * 1000),
+        lineRef: g.lineRef, journeyRef: g.journeyRef, vehicleRef: g.vehicleRef,
+        remainingM: Math.max(0, remaining), recordedMs: last.t, speedKmh
+      });
+    }
+    fresh.sort((a, b) => a.arrivalMs - b.arrivalMs);
+    return { fresh, stale, unusable, passed };
+  }
+
+  function build(nowMs, rideStopRows, siriRows) {
+    const s = scheduleInfo(rideStopRows, nowMs);
+    const g = gpsInfo(siriRows, s.stopDist, nowMs);
+    let primary = null, following = [];
+    if (g.fresh.length) {
+      primary = g.fresh[0];
+      const lastGps = g.fresh[g.fresh.length - 1].arrivalMs;
+      following = g.fresh.slice(1).concat(s.sched.filter(x => x.arrivalMs > lastGps));
+    } else {
+      primary = s.sched[0] || null;
+      following = s.sched.slice(1);
+    }
+    return {
+      primary, following: following.slice(0, 4),
+      nextSchedule: s.sched[0] || null,
+      lineInfo: s.lineInfo, stopDist: s.stopDist,
+      gps: { fresh: g.fresh.length, stale: g.stale, unusable: g.unusable, passed: g.passed },
+      schedCount: s.sched.length
+    };
+  }
+
+  return { CFG, fmtTime, israelDate, prevDate, minutesLeft, build, scheduleInfo, gpsInfo };
+})();
+/*LOGIC_END*/
+
+(() => {
+  const params = new URLSearchParams(location.search);
+  const API_BASE = (params.get('api') || 'https://open-bus-stride-api.hasadna.org.il').replace(/\/$/, '');
+  const DEBUG = params.has('debug');
+  const REFRESH_MS = 30000;
+  const SCHEDULE_BEHIND_MS = 30 * 60e3;   // нужно, чтобы узнать line_ref и дистанцию до остановки даже для опаздывающих рейсов
+  const SCHEDULE_AHEAD_MS = 4 * 3600e3;
+  const GPS_WINDOW_MS = 12 * 60e3;
+  const DATA_STALE_MS = 120e3;
+  const $ = (id) => document.getElementById(id);
+
+  let state = null;            // { fetchedAt, result }
+  let lastError = null;
+  let inflight = false;
+  const stopCache = new Map();
+
+  async function getJson(path, query) {
+    const url = new URL(API_BASE + path);
+    for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(url.toString(), { signal: ctrl.signal, headers: { accept: 'application/json' } });
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + path);
+      return await res.json();
+    } finally { clearTimeout(timer); }
+  }
+
+  async function getStopIds(nowMs) {
+    const today = Logic.israelDate(nowMs);
+    if (stopCache.has(today)) return stopCache.get(today);
+    const rows = await getJson('/gtfs_stops/list', {
+      code: Logic.CFG.STOP_CODE, date_from: Logic.prevDate(today), date_to: today, limit: 10
+    });
+    const ids = rows.filter(r => r.code === Logic.CFG.STOP_CODE).map(r => r.id);
+    if (!ids.length) throw new Error('Остановка 41480 не найдена в GTFS на сегодня');
+    stopCache.set(today, ids);
+    return ids;
+  }
+
+  async function refresh() {
+    if (inflight) return;
+    inflight = true;
+    $('refreshBtn').disabled = true; $('refreshBtn').textContent = 'Обновляю…';
+    const now = Date.now();
+    const dbg = { now: new Date(now).toISOString() };
+    try {
+      const stopIds = await getStopIds(now);
+      dbg.stopIds = stopIds;
+      const from = new Date(now - SCHEDULE_BEHIND_MS).toISOString();
+      const to = new Date(now + SCHEDULE_AHEAD_MS).toISOString();
+      const rsRows = (await Promise.all(stopIds.map(id => getJson('/gtfs_ride_stops/list', {
+        gtfs_stop_ids: id, gtfs_route__route_short_name: Logic.CFG.ROUTE,
+        gtfs_route__operator_refs: Logic.CFG.OPERATOR,
+        arrival_time_from: from, arrival_time_to: to, limit: 500
+      })))).flat();
+      dbg.rideStopRows = rsRows.length;
+
+      const lineRefs = [...new Set(rsRows
+        .filter(r => r && r.gtfs_stop__code === Logic.CFG.STOP_CODE && r.gtfs_route__operator_ref === Logic.CFG.OPERATOR)
+        .map(r => r.gtfs_route__line_ref))];
+      dbg.lineRefs = lineRefs;
+
+      let siriRows = [], gpsError = null;
+      try {
+        siriRows = (await Promise.all(lineRefs.map(l => getJson('/siri_vehicle_locations/list', {
+          siri_routes__line_ref: l,
+          recorded_at_time_from: new Date(now - GPS_WINDOW_MS).toISOString(),
+          recorded_at_time_to: new Date(now + 60e3).toISOString(),
+          limit: 2000
+        })))).flat();
+      } catch (e) { gpsError = e; }
+      dbg.siriRows = siriRows.length;
+      if (gpsError) dbg.gpsError = String(gpsError);
+
+      const result = Logic.build(now, rsRows, siriRows);
+      result.gpsError = gpsError ? String(gpsError.message || gpsError) : null;
+      state = { fetchedAt: now, result };
+      lastError = null;
+      dbg.result = result;
+    } catch (e) {
+      lastError = e;
+      dbg.error = String(e);
+    } finally {
+      inflight = false;
+      $('refreshBtn').disabled = false; $('refreshBtn').textContent = 'Обновить';
+      if (DEBUG) { $('debug').hidden = false; $('debug').textContent = JSON.stringify(dbg, null, 1); }
+      render();
+    }
+  }
+
+  function errorText(e) {
+    if (e && e.name === 'AbortError') return 'Сервер не ответил за 15 секунд.';
+    if (e instanceof TypeError) return 'Нет сети или браузер заблокировал запрос к API (CORS). Откройте страницу с ?debug для деталей.';
+    return String(e && e.message || e);
+  }
+
+  function render() {
+    const now = Date.now();
+    const noticeEl = $('notice');
+    const notes = []; let level = 'warn';
+
+    $('updated').textContent = state ? 'Обновлено ' + Logic.fmtTime(state.fetchedAt, true) : 'Обновлено —';
+
+    if (!state) {
+      $('label').textContent = lastError ? 'Нет данных' : 'Загрузка…';
+      $('etaNum').textContent = '–'; $('etaNum').className = 'word';
+      $('etaUnit').hidden = true; $('source').hidden = true; $('sub').textContent = ''; $('sub2').textContent = '';
+      $('nextList').innerHTML = '';
+      if (lastError) { noticeEl.hidden = false; noticeEl.className = 'notice error'; noticeEl.textContent = errorText(lastError); }
+      return;
+    }
+
+    const r = state.result;
+    const hero = $('hero');
+    const dataStale = now - state.fetchedAt > DATA_STALE_MS;
+    hero.classList.toggle('stale', dataStale);
+
+    const p = r.primary;
+    const src = $('source'), srcText = $('sourceText');
+    $('sub2').textContent = '';
+
+    if (!p) {
+      $('label').textContent = 'Автобусов нет';
+      $('etaNum').textContent = '—'; $('etaNum').className = 'word';
+      $('etaUnit').hidden = true; src.hidden = true;
+      $('sub').textContent = 'В ближайшие 4 часа рейсов 271 на этой остановке нет';
+    } else {
+      const mins = Logic.minutesLeft(p.arrivalMs, now);
+      $('label').textContent = 'До прибытия';
+      if (mins === 0) { $('etaNum').textContent = 'Сейчас'; $('etaNum').className = 'word'; $('etaUnit').hidden = true; }
+      else { $('etaNum').textContent = String(mins); $('etaNum').className = mins >= 100 ? 'mid' : ''; $('etaUnit').hidden = false; }
+      src.hidden = false;
+      if (p.kind === 'gps') {
+        src.className = 'source gps'; srcText.textContent = 'GPS';
+        const km = p.remainingM >= 1000 ? (p.remainingM / 1000).toFixed(1).replace('.', ',') + ' км' : Math.round(p.remainingM / 10) * 10 + ' м';
+        const age = Math.max(0, Math.round((now - p.recordedMs) / 1000));
+        $('sub').textContent = 'до остановки ' + km + ' · данные ' + age + ' с назад · оценка';
+        if (r.nextSchedule) $('sub2').textContent = 'По расписанию ближайший: ' + Logic.fmtTime(r.nextSchedule.arrivalMs);
+      } else {
+        src.className = 'source sched'; srcText.textContent = 'РАСПИСАНИЕ';
+        $('sub').textContent = 'прибытие по расписанию в ' + Logic.fmtTime(p.arrivalMs) + ' · GPS-подтверждения нет';
+      }
+    }
+
+    // подпись направления из данных API (иврит), для самопроверки
+    const info = p && r.lineInfo[p.lineRef];
+    const destEl = $('dest');
+    if (info && info.dest) { destEl.hidden = false; destEl.textContent = '→ ' + info.dest; } else { destEl.hidden = true; }
+
+    // следующие рейсы
+    const ul = $('nextList'); ul.innerHTML = '';
+    if (!r.following.length) {
+      const li = document.createElement('li'); li.className = 'empty'; li.textContent = p ? 'Дальше рейсов нет в ближайшие 4 часа' : '';
+      if (p) ul.appendChild(li);
+    }
+    for (const x of r.following) {
+      const li = document.createElement('li');
+      const t = document.createElement('span'); t.className = 't'; t.textContent = Logic.fmtTime(x.arrivalMs);
+      const m = document.createElement('span'); m.className = 'm'; m.textContent = 'через ' + Logic.minutesLeft(x.arrivalMs, now) + ' мин';
+      const tag = document.createElement('span'); tag.className = 'tag ' + (x.kind === 'gps' ? 'gps' : 'sched'); tag.textContent = x.kind === 'gps' ? 'GPS' : 'расписание';
+      li.append(t, m, tag); ul.appendChild(li);
+    }
+
+    // пояснения
+    if (r.gpsError) notes.push('GPS-данные недоступны (' + r.gpsError + '). Показано расписание.');
+    else if (p && p.kind === 'schedule') {
+      if (r.gps.stale) notes.push('GPS-данные устарели (старше 3 минут), поэтому показано расписание.');
+      else if (r.gps.unusable) notes.push('Автобус на линии, но не движется или данных для прогноза мало. Показано расписание.');
+      else if (r.schedCount) notes.push('GPS-данных по ближайшим рейсам нет. Показано расписание.');
+    }
+    if (lastError) { notes.push('Не удалось обновить: ' + errorText(lastError) + ' Показаны данные от ' + Logic.fmtTime(state.fetchedAt) + '.'); level = 'error'; }
+    else if (dataStale) notes.push('Данные не обновлялись больше 2 минут (последние: ' + Logic.fmtTime(state.fetchedAt) + ').');
+
+    if (notes.length) { noticeEl.hidden = false; noticeEl.className = 'notice ' + level; noticeEl.textContent = notes.join(' '); }
+    else noticeEl.hidden = true;
+  }
+
+  $('refreshBtn').addEventListener('click', refresh);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) refresh(); });
+  setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, REFRESH_MS);
+  setInterval(() => { if (document.visibilityState === 'visible' && state) render(); }, 5000);
+
+  render();
+  refresh();
+})();
+</script>
+</body>
+</html>
