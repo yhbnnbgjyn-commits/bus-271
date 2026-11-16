@@ -175,12 +175,14 @@ const Logic = (() => {
   // скорость = средняя по собственным точкам автобуса за последние минуты (не мгновенная velocity).
   function gpsInfo(rows, stopDist, nowMs) {
     const groups = new Map();
+    let latestMs = 0;   // самая свежая GPS-точка, которую вообще отдал API (для сообщения о задержке)
     for (const r of rows || []) {
       if (r.siri_route__operator_ref !== CFG.OPERATOR) continue;
       const lr = r.siri_route__line_ref;
       if (!(lr in stopDist)) continue;
       const t = Date.parse(r.recorded_at_time);
       if (!isFinite(t) || typeof r.distance_from_journey_start !== 'number') continue;
+      if (t > latestMs) latestMs = t;
       const key = r.siri_ride__id != null ? r.siri_ride__id : r.siri_ride__journey_ref + '|' + r.siri_ride__vehicle_ref;
       let g = groups.get(key);
       if (!g) { g = { lineRef: lr, journeyRef: r.siri_ride__journey_ref, vehicleRef: r.siri_ride__vehicle_ref, pts: [] }; groups.set(key, g); }
@@ -219,7 +221,7 @@ const Logic = (() => {
       });
     }
     fresh.sort((a, b) => a.arrivalMs - b.arrivalMs);
-    return { fresh, stale, unusable, passed };
+    return { fresh, stale, unusable, passed, latestMs };
   }
 
   function build(nowMs, rideStopRows, siriRows) {
@@ -238,7 +240,7 @@ const Logic = (() => {
       primary, following: following.slice(0, 4),
       nextSchedule: s.sched[0] || null,
       lineInfo: s.lineInfo, stopDist: s.stopDist,
-      gps: { fresh: g.fresh.length, stale: g.stale, unusable: g.unusable, passed: g.passed },
+      gps: { fresh: g.fresh.length, stale: g.stale, unusable: g.unusable, passed: g.passed, latestMs: g.latestMs },
       schedCount: s.sched.length
     };
   }
@@ -254,7 +256,7 @@ const Logic = (() => {
   const REFRESH_MS = 30000;
   const SCHEDULE_BEHIND_MS = 30 * 60e3;   // нужно, чтобы узнать line_ref и дистанцию до остановки даже для опаздывающих рейсов
   const SCHEDULE_AHEAD_MS = 4 * 3600e3;
-  const GPS_WINDOW_MS = 12 * 60e3;
+  const GPS_WINDOW_MS = 30 * 60e3;
   const DATA_STALE_MS = 120e3;
   const $ = (id) => document.getElementById(id);
 
@@ -412,9 +414,11 @@ const Logic = (() => {
     }
 
     // пояснения
+    const lagS = r.gps.latestMs ? (state.fetchedAt - r.gps.latestMs) / 1000 : null;
     if (r.gpsError) notes.push('GPS-данные недоступны (' + r.gpsError + '). Показано расписание.');
     else if (p && p.kind === 'schedule') {
-      if (r.gps.stale) notes.push('GPS-данные устарели (старше 3 минут), поэтому показано расписание.');
+      if (lagS !== null && lagS > Logic.CFG.GPS_MAX_AGE_S) notes.push('Источник GPS (Open Bus Stride) отстаёт: последняя точка линии 271 в ' + Logic.fmtTime(r.gps.latestMs) + ' (' + Math.round(lagS / 60) + ' мин назад). Такой GPS не показывается как актуальный, поэтому показано расписание.');
+      else if (r.gps.stale) notes.push('GPS-данные устарели (старше 3 минут), поэтому показано расписание.');
       else if (r.gps.unusable) notes.push('Автобус на линии, но не движется или данных для прогноза мало. Показано расписание.');
       else if (r.schedCount) notes.push('GPS-данных по ближайшим рейсам нет. Показано расписание.');
     }
